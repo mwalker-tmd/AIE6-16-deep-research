@@ -36,10 +36,21 @@ dependencies = [
     "azure-search-documents>=11.5.2",
     "langgraph-cli[inmem]>=0.2.10",
     "jupyter",
+    "sqlite-utils>=3.35.2",
+    "qdrant-client>=1.7.0",
+    "huggingface-hub>=0.20.3",
+    "transformers>=4.37.2",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+dev = [
+    "mypy>=1.11.1",
+    "ruff>=0.6.1",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "coverage>=7.4.0",
+]
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
@@ -77,3 +88,23 @@ lint.ignore = [
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "--cov=open_deep_research --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["src/open_deep_research"]
+omit = ["tests/*", "**/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "pass",
+    "@abstractmethod",
+]

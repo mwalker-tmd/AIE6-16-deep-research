@@ -35,6 +35,12 @@ ENV/
 .langgraph_api/
 uv.lock
 
+# Environment and coverage
+.env
+.coverage
+coverage.xml
+htmlcov/
+
 # OS specific
 .DS_Store
 Thumbs.db 
