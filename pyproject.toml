@@ -93,6 +93,16 @@ convention = "google"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v"
+filterwarnings = [
+    # TODO: These warnings are from Pydantic V2 used by LangGraph/LangChain dependencies.
+    # When these dependencies update to use min_length/max_length instead of min_items/max_items,
+    # we can remove these filters. See:
+    # - https://docs.pydantic.dev/latest/migration/#min_items-and-max_items
+    # - https://github.com/langchain-ai/langgraph/issues/XXX (TODO: Add issue number when available)
+    "ignore::pydantic.PydanticDeprecatedSince20:",
+]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["src/open_deep_research"]
