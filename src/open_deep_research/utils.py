@@ -27,7 +27,72 @@ from langchain_core.tools import tool
 from langsmith import traceable
 
 from open_deep_research.state import Section
-    
+from open_deep_research.cache import HybridCache
+import requests
+
+class HFEmbedder:
+    def __init__(self, model_name=None):
+        # Use environment variable or default to BGE model
+        self.model_name = model_name or os.getenv('EMBEDDING_MODEL', 'BAAI/bge-base-en-v1.5')
+        self.api_key = os.getenv('HUGGINGFACE_API_KEY')
+        self.endpoint_url = os.getenv('HUGGINGFACE_ENDPOINT_URL')
+        
+        if not self.api_key:
+            raise ValueError("HUGGINGFACE_API_KEY environment variable is required")
+        if not self.endpoint_url:
+            raise ValueError("HUGGINGFACE_ENDPOINT_URL environment variable is required")
+
+    def encode(self, text: str) -> list[float]:
+        """Get embeddings from HuggingFace Inference API."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "inputs": text,
+            "options": {"wait_for_model": True}
+        }
+        
+        response = requests.post(self.endpoint_url, headers=headers, json=payload)
+        response.raise_for_status()
+        
+        # The response format depends on the model, but typically returns a list of floats
+        embeddings = response.json()
+        if isinstance(embeddings, list):
+            return embeddings
+        elif isinstance(embeddings, dict) and "embedding" in embeddings:
+            return embeddings["embedding"]
+        else:
+            raise ValueError(f"Unexpected response format from HuggingFace API: {embeddings}")
+
+# Initialize the cache with configuration from environment variables
+def get_embedder():
+    """Lazy initialization of the embedder."""
+    return HFEmbedder()
+
+def get_cache():
+    """Lazy initialization of the cache."""
+    embedder = get_embedder()
+    cache_config = {
+        'db_path': os.getenv('CACHE_DB_PATH', 'cache.sqlite'),
+        'qdrant_url': os.getenv('QDRANT_URL', 'http://localhost:6333'),
+        'collection_name': os.getenv('QDRANT_COLLECTION', 'search_cache'),
+        'embed_fn': embedder.encode
+    }
+
+    # Add optional configuration parameters if specified
+    if os.getenv('QDRANT_API_KEY'):
+        cache_config['qdrant_api_key'] = os.getenv('QDRANT_API_KEY')
+
+    if os.getenv('QDRANT_TIMEOUT'):
+        cache_config['timeout'] = float(os.getenv('QDRANT_TIMEOUT'))
+
+    if os.getenv('CACHE_TTL'):
+        cache_config['ttl'] = int(os.getenv('CACHE_TTL'))
+
+    return HybridCache(**cache_config)
+
 def get_config_value(value):
     """
     Helper function to handle string, dict, and enum cases of configuration values
@@ -1438,33 +1503,62 @@ async def select_and_execute_search(search_api: str, query_list: list[str], para
         ValueError: If an unsupported search API is specified
     """
     print(f"query_list: {query_list} params_to_pass: {params_to_pass}")
+    
+    # Get cache instance
+    cache = get_cache()
+    
+    # Try to get results from cache first
+    cached_results = []
+    uncached_queries = []
+    
+    for query in query_list:
+        # Try exact match first
+        exact_result = cache.get_exact(query)
+        if exact_result:
+            cached_results.append(exact_result)
+        else:
+            # Try semantic match
+            semantic_result = cache.get_semantic(query)
+            if semantic_result:
+                cached_results.append(semantic_result)
+            else:
+                uncached_queries.append(query)
+    
+    # If all queries were cached, return combined results
+    if not uncached_queries:
+        return deduplicate_and_format_sources(cached_results, max_tokens_per_source=4000)
+    
+    # Execute search for uncached queries
+    search_results = []
     if search_api == "tavily":
         # Tavily search tool used with both workflow and agent 
-        return await tavily_search.ainvoke({'queries': query_list}, **params_to_pass)
+        search_results = await tavily_search.ainvoke({'queries': uncached_queries}, **params_to_pass)
     elif search_api == "duckduckgo":
         # DuckDuckGo search tool used with both workflow and agent 
-        return await duckduckgo_search.ainvoke({'search_queries': query_list})
+        search_results = await duckduckgo_search.ainvoke({'search_queries': uncached_queries})
     elif search_api == "perplexity":
-        search_results = perplexity_search(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = perplexity_search(uncached_queries, **params_to_pass)
     elif search_api == "exa":
-        search_results = await exa_search(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = await exa_search(uncached_queries, **params_to_pass)
     elif search_api == "arxiv":
-        search_results = await arxiv_search_async(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = await arxiv_search_async(uncached_queries, **params_to_pass)
     elif search_api == "pubmed":
-        search_results = await pubmed_search_async(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = await pubmed_search_async(uncached_queries, **params_to_pass)
     elif search_api == "linkup":
-        search_results = await linkup_search(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = await linkup_search(uncached_queries, **params_to_pass)
     elif search_api == "googlesearch":
-        search_results = await google_search_async(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = await google_search_async(uncached_queries, **params_to_pass)
     elif search_api == "azureaisearch":
-        #raise NotImplementedError("Azure AI Search is not implemented yet.")
-        search_results = await azureaisearch_search_async(query_list, **params_to_pass)
-        return deduplicate_and_format_sources(search_results, max_tokens_per_source=4000)
+        search_results = await azureaisearch_search_async(uncached_queries, **params_to_pass)
     else:
         raise ValueError(f"Unsupported search API: {search_api}")
+    
+    # Cache the new results
+    for query, result in zip(uncached_queries, search_results):
+        cache.put_exact(query, result)
+        cache.put_semantic(query, result)
+    
+    # Combine cached and new results
+    all_results = cached_results + search_results
+    
+    return deduplicate_and_format_sources(all_results, max_tokens_per_source=4000)

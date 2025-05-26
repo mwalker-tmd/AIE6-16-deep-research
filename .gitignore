@@ -34,6 +34,8 @@ ENV/
 # Project specific
 .langgraph_api/
 uv.lock
+cache.sqlite
+*.sqlite
 
 # Environment and coverage
 .env
